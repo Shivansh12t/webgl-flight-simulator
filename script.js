@@ -2,591 +2,812 @@ import * as THREE from 'three';
 
 // --- Core Setup ---
 let scene, camera, renderer, clock;
-let playerPlane, playerVelocity, targetQuaternion; // Use target quaternion
+let hudScene, hudCamera; // For Orthographic HUD
+let playerPlane, playerVelocity, targetQuaternion; // TargetQuaternion might be unused with direct controls but keep for now
 let groundPlane;
 let activeObjects = [];
 let score = 0;
 let playerHP = 100;
-let currentSpeedFactor = 1.0; // Start at base speed
-let remainingTime = 120; // Seconds
+const MAX_HP = 100;
+let currentSpeedFactor = 1.0;
+let remainingTime = 120;
 let gameOver = false;
 let gameOverReason = "";
+let gameStarted = false;
 
 // --- Game Constants ---
-const PLANE_SIZE = 2;
-const BASE_SPEED = 50; // Increased base speed
-const MAX_SPEED_FACTOR = 3.0;
-const MIN_SPEED_FACTOR = 0.4;
-const ACCELERATION = 2.0;
-const DECELERATION = 1.0; // How quickly speed factor drops when not accelerating
-const PITCH_SPEED = Math.PI * 0.6; // Radians per second
-const YAW_SPEED = Math.PI * 0.5;
-const ROLL_SPEED = Math.PI * 1.2;
-const MOUSE_SENSITIVITY = 0.0025; // Adjusted sensitivity
-const PITCH_LIMIT = Math.PI / 2.2;
-const ROLL_LIMIT = Math.PI / 1.8; // Limit how far the plane can roll
-const INPUT_DAMPING = 0.92; // Damping factor for pitch/roll when no input
-const BANKING_FACTOR = 0.08; // How much roll influences yaw
-const SPAWN_DISTANCE_MIN = 350;
-const SPAWN_DISTANCE_MAX = 600;
-const SPAWN_WIDTH = 250; // How wide the spawn area is horizontally
-const SPAWN_HEIGHT = 150; // How wide the spawn area is vertically
-const CLEANUP_DISTANCE = 200;
-const MAX_OBJECTS = 60; // Increased density
-const RING_BASE_RADIUS = 6;
-const RING_RADIUS_VARIANCE = 4;
-const OBSTACLE_BASE_SIZE = 2;
-const OBSTACLE_SIZE_VARIANCE = 3;
-const OBSTACLE_DAMAGE_FACTOR = 8; // Damage scales with size
+
+// ADJUST THESE CONSTANTS FOR BETTER CONTROL FEEL
+const TURN_SPEED = 1.0;      // Sensitivity for Yaw (Mouse X)
+const ROLL_SPEED = 1.8;      // Sensitivity for Roll (A/D Keys)
+const PITCH_SPEED = 1.2;     // Sensitivity for Pitch (Mouse Y)
+const MOUSE_SENSITIVITY = 0.0015; // General mouse sensitivity multiplier
+const ACCELERATION = 1.0;    // How quickly speed factor changes
+const MOVEMENT_DAMPING = 0.96; // Damping factor applied directly to velocity (closer to 1 = less damping, 0.95-0.98 is typical)
+
+const BASE_SPEED = 60;       // Base speed units per second at factor 1.0
+const MAX_SPEED_FACTOR = 2.0;
+const MIN_SPEED_FACTOR = 0.5;
+const CAMERA_DISTANCE = 20; // Slightly closer camera
+const CAMERA_HEIGHT = 6;   // Slightly lower camera
+const CAMERA_LAG = 0.08;     // Camera smoothing factor
+const OBJECT_SPAWN_RADIUS_MIN = 250;
+const OBJECT_SPAWN_RADIUS_MAX = 700;
+const OBJECT_SPAWN_HEIGHT_MIN = 10;
+const OBJECT_SPAWN_HEIGHT_MAX = 180;
+const MAX_OBJECTS = 45;
+const INITIAL_OBJECTS = 30;
+const RING_POINTS_BASE = 10;
+const RING_POINTS_SIZE_MULTIPLIER = 15; // Smaller ring = more points
+const OBSTACLE_DAMAGE_BASE = 15;
+const OBSTACLE_DAMAGE_SIZE_MULTIPLIER = 10; // Bigger obstacle = more damage
 const OBSTACLE_SCORE_PENALTY = 5;
-const CAMERA_DISTANCE = PLANE_SIZE * 6; // Adjusted camera distance
-const CAMERA_HEIGHT = PLANE_SIZE * 1.8;
-const CAMERA_LAG = 0.05; // Smaller value = less lag
+const GROUND_LEVEL = -2; // Y position of the visual ground plane
+
+// Make PLANE_SIZE slightly larger to accommodate the new shape visually
+const PLANE_SIZE = 8; // Adjust as needed for visual scale and collision
+
+// HUD Constants
+const HUD_MARGIN = 20; // Pixels from edge for HUD elements
+const HUD_FONT_SIZE = 24;
+const HUD_ELEMENT_HEIGHT = 30; // Approx height for positioning
 
 // --- Input State ---
 const keyState = {};
 let mouseDelta = { x: 0, y: 0 };
+let pitchInput = 0;
+let yawInput = 0;
+let rollInput = 0;
 let isPointerLocked = false;
-let rollInput = 0; // -1, 0, 1
-let pitchInput = 0; // -1, 0, 1 (from mouse)
-let yawInput = 0; // -1, 0, 1 (from mouse)
 
+// --- UI Elements (WebGL HUD Objects) ---
+let scoreTextPlane, timerTextPlane, hpLabelTextPlane; // Planes for text textures
+let hpBarBgPlane, hpBarFgPlane; // Planes for the health bar
+let lastScore = -1, lastTime = -1, lastHP = -1; // Track changes for performance
 
-// --- UI Elements ---
-const scoreElement = document.getElementById('score');
-const hpElement = document.getElementById('hp');
-const speedElement = document.getElementById('speed');
-const timerElement = document.getElementById('timer'); // Get timer element
+// --- HTML Elements (Modal/Game Over) ---
 const gameOverElement = document.getElementById('game-over');
 const canvasContainer = document.getElementById('canvas-container');
+const instructionModal = document.getElementById('instruction-modal');
+const startGameButton = document.getElementById('start-game-button');
 
 // --- Initialization ---
 function init() {
+    console.log("Initializing...");
+    // --- Main Scene Setup ---
     scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0x87CEEB, 150, 1000); // Adjusted fog range
-
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000); // Increased far plane
-
+    scene.fog = new THREE.Fog(0x87CEEB, 200, 1200); // Adjusted fog distances
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setClearColor(0x87CEEB);
+    renderer.setClearColor(0x87CEEB); // Sky blue background
+    renderer.autoClear = false; // IMPORTANT: Allow manual clearing for multi-scene render
     canvasContainer.appendChild(renderer.domElement);
-
-    clock = new THREE.Clock();
+    clock = new THREE.Clock(false); // Don't start clock immediately
 
     // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7); // Slightly brighter ambient
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // Slightly less ambient
     scene.add(ambientLight);
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0); // Slightly stronger directional
-    directionalLight.position.set(100, 150, 50);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9); // Slightly stronger directional
+    directionalLight.position.set(100, 150, 100); // Adjust light direction
+    directionalLight.castShadow = true; // Enable shadows if needed (performance cost)
+    // Configure shadow properties if enabled (optional)
+    // directionalLight.shadow.mapSize.width = 1024;
+    // directionalLight.shadow.mapSize.height = 1024;
+    // directionalLight.shadow.camera.near = 0.5;
+    // directionalLight.shadow.camera.far = 500;
     scene.add(directionalLight);
 
-    // Ground Plane (Illusion)
-    createGroundPlane();
+    // --- HUD Scene Setup ---
+    hudScene = new THREE.Scene();
+    hudCamera = new THREE.OrthographicCamera(
+        0, window.innerWidth, window.innerHeight, 0, 1, 10 // left, right, top, bottom, near, far
+    );
+    hudCamera.position.z = 5;
 
-    // Player Plane
+    // --- Game Objects ---
+    createGroundPlane();        // <<< ADDED BACK
     createPlayerPlane();
     playerVelocity = new THREE.Vector3();
-    targetQuaternion = playerPlane.quaternion.clone(); // Start with current rotation
+    targetQuaternion = playerPlane.quaternion.clone(); // <<< Initialize targetQuaternion correctly
 
-    // Initial Objects
-    spawnInitialObjects();
+    // --- Create WebGL HUD ---
+    createWebGLHUD();
 
+    // --- Event Listeners & Initial State ---
     setupEventListeners();
-    updateCamera(true); // Initial camera snap
+    updateCamera(true); // Initial camera snap for main scene
+    updateWebGLHUD(); // Initial update to set text/bar state
 
-    animate();
+    console.log("Initialization complete. Waiting for Start button.");
+    animate(); // Start render loop (waits for gameStarted flag)
 }
 
-// --- Player Plane and Ground ---
-function createPlayerPlane() {
-    // (Using the same simple model as before)
-    playerPlane = new THREE.Group();
-    const bodyGeo = new THREE.ConeGeometry(PLANE_SIZE * 0.5, PLANE_SIZE * 2.5, 8);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.6, roughness: 0.5 });
-    const body = new THREE.Mesh(bodyGeo, bodyMat);
-    body.rotation.x = Math.PI / 2;
-    playerPlane.add(body);
+// --- Ground Creation --- // <<< ADDED BACK
 
-    const wingGeo = new THREE.BoxGeometry(PLANE_SIZE * 3, PLANE_SIZE * 0.2, PLANE_SIZE * 0.8);
-    const wingMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.5, roughness: 0.6 });
-    const wings = new THREE.Mesh(wingGeo, wingMat);
-    wings.position.y = -PLANE_SIZE * 0.1;
-    wings.position.z = -PLANE_SIZE * 0.3;
-    playerPlane.add(wings);
+function createCheckerboardTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const context = canvas.getContext('2d');
+    const size = 512 / 16; // 16x16 checkers
 
-    const tailFinGeo = new THREE.BoxGeometry(PLANE_SIZE * 0.2, PLANE_SIZE * 0.8, PLANE_SIZE * 0.5);
-    const tailFin = new THREE.Mesh(tailFinGeo, wingMat);
-    tailFin.position.y = PLANE_SIZE * 0.3;
-    tailFin.position.z = -PLANE_SIZE * 1.0;
-    playerPlane.add(tailFin);
-
-    const tailWingGeo = new THREE.BoxGeometry(PLANE_SIZE * 1.2, PLANE_SIZE * 0.15, PLANE_SIZE * 0.4);
-    const tailWings = new THREE.Mesh(tailWingGeo, wingMat);
-    tailWings.position.y = -PLANE_SIZE * 0.1;
-    tailWings.position.z = -PLANE_SIZE * 1.0;
-    playerPlane.add(tailWings);
-
-    playerPlane.position.set(0, 60, 0); // Start higher
-    scene.add(playerPlane);
+    for (let row = 0; row < 16; row++) {
+        for (let col = 0; col < 16; col++) {
+            context.fillStyle = (row + col) % 2 === 0 ? '#779977' : '#557755'; // Greener tones
+            context.fillRect(col * size, row * size, size, size);
+        }
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(200, 200); // Repeat texture many times
+    if (renderer && renderer.capabilities) { // Check if renderer is available
+       texture.anisotropy = renderer.capabilities.getMaxAnisotropy(); // Sharper at angles
+    }
+    texture.needsUpdate = true;
+    return texture;
 }
 
 function createGroundPlane() {
-    const groundTexture = createCheckerboardTexture(1024, 1024); // Larger texture
-    groundTexture.wrapS = THREE.RepeatWrapping;
-    groundTexture.wrapT = THREE.RepeatWrapping;
-    groundTexture.repeat.set(100, 100); // Repeat texture many times
-
-    const groundMaterial = new THREE.MeshLambertMaterial({ map: groundTexture }); // Lambert for less reflection
-    const groundGeometry = new THREE.PlaneGeometry(20000, 20000); // Make it huge
+    const groundTexture = createCheckerboardTexture();
+    // Use MeshStandardMaterial for better lighting interaction if needed, or Lambert
+    const groundMaterial = new THREE.MeshLambertMaterial({ map: groundTexture });
+    const groundGeometry = new THREE.PlaneGeometry(20000, 20000); // Very large plane
     groundPlane = new THREE.Mesh(groundGeometry, groundMaterial);
-    groundPlane.rotation.x = -Math.PI / 2; // Lay flat
-    groundPlane.position.y = -10; // Position below starting point
+    groundPlane.rotation.x = -Math.PI / 2; // Rotate to be horizontal
+    groundPlane.position.y = GROUND_LEVEL; // Position according to constant
+    // groundPlane.receiveShadow = true; // Allow ground to receive shadows (if enabled)
     scene.add(groundPlane);
-}
-
-function createCheckerboardTexture(width, height) {
-    const size = width * height;
-    const data = new Uint8Array(3 * size);
-    const color1 = new THREE.Color(0x55aa55); // Greenish
-    const color2 = new THREE.Color(0x448844); // Darker Greenish
-
-    for (let i = 0; i < size; i++) {
-        const x = i % width;
-        const y = Math.floor(i / width);
-        const stride = i * 3;
-
-        const isDark = (Math.floor(x / 64) % 2 === Math.floor(y / 64) % 2);
-        const color = isDark ? color1 : color2;
-
-        data[stride] = Math.floor(color.r * 255);
-        data[stride + 1] = Math.floor(color.g * 255);
-        data[stride + 2] = Math.floor(color.b * 255);
-    }
-    return new THREE.DataTexture(data, width, height, THREE.RGBFormat);
+    console.log("Ground plane created.");
 }
 
 
-// --- Event Listeners ---
-function setupEventListeners() {
-    // (Pointer Lock setup remains the same as before)
-    window.addEventListener('keydown', (event) => keyState[event.key.toLowerCase()] = true);
-    window.addEventListener('keyup', (event) => keyState[event.key.toLowerCase()] = false);
-    window.addEventListener('resize', onWindowResize);
+// --- Player Plane Creation --- // <<< New Version
 
-    canvasContainer.addEventListener('click', () => {
-        if (!isPointerLocked && !gameOver) {
-            canvasContainer.requestPointerLock = canvasContainer.requestPointerLock ||
-                                                canvasContainer.mozRequestPointerLock ||
-                                                canvasContainer.webkitRequestPointerLock;
-            canvasContainer.requestPointerLock();
-        }
-    });
+function createPlayerPlane() {
+    playerPlane = new THREE.Group(); // Use a Group
 
-    document.addEventListener('pointerlockchange', lockChangeAlert, false);
-    document.addEventListener('mozpointerlockchange', lockChangeAlert, false);
-    document.addEventListener('webkitpointerlockchange', lockChangeAlert, false);
+    const bodyMaterial = new THREE.MeshPhongMaterial({ color: 0xcccccc, flatShading: false }); // Smoother shading
+    const wingMaterial = new THREE.MeshPhongMaterial({ color: 0xaaaaaa, flatShading: false });
 
-    document.addEventListener('mousemove', onMouseMove, false);
+    // Fuselage
+    const fuselageGeo = new THREE.BoxGeometry(PLANE_SIZE * 0.5, PLANE_SIZE * 0.4, PLANE_SIZE * 1.8);
+    const fuselage = new THREE.Mesh(fuselageGeo, bodyMaterial);
+    // fuselage.castShadow = true; // Enable shadows if needed
+    playerPlane.add(fuselage);
+
+    // Wings
+    const wingGeo = new THREE.BoxGeometry(PLANE_SIZE * 1.8, PLANE_SIZE * 0.1, PLANE_SIZE * 0.6);
+    const mainWing = new THREE.Mesh(wingGeo, wingMaterial);
+    mainWing.position.y = 0;
+    mainWing.position.z = -PLANE_SIZE * 0.2;
+    // mainWing.castShadow = true;
+    playerPlane.add(mainWing);
+
+    // Tail Fin (Vertical Stabilizer)
+    const tailFinGeo = new THREE.BoxGeometry(PLANE_SIZE * 0.15, PLANE_SIZE * 0.6, PLANE_SIZE * 0.4);
+    const tailFin = new THREE.Mesh(tailFinGeo, wingMaterial);
+    tailFin.position.z = PLANE_SIZE * 0.8;
+    tailFin.position.y = PLANE_SIZE * 0.35;
+    // tailFin.castShadow = true;
+    playerPlane.add(tailFin);
+
+    // Horizontal Stabilizer (Tail Wings)
+    const hStabGeo = new THREE.BoxGeometry(PLANE_SIZE * 0.8, PLANE_SIZE * 0.08, PLANE_SIZE * 0.3);
+    const hStab = new THREE.Mesh(hStabGeo, wingMaterial);
+    hStab.position.z = PLANE_SIZE * 0.8;
+    hStab.position.y = PLANE_SIZE * 0.1;
+    // hStab.castShadow = true;
+    playerPlane.add(hStab);
+
+    playerPlane.position.set(0, 50, 0); // Start position
+    scene.add(playerPlane);
+    console.log("Player plane created (Group).");
 }
 
-function lockChangeAlert() {
-     if (document.pointerLockElement === canvasContainer ||
-        document.mozPointerLockElement === canvasContainer ||
-        document.webkitPointerLockElement === canvasContainer) {
-        isPointerLocked = true;
-    } else {
-        isPointerLocked = false;
-        // Reset input axes when lock is lost
-        mouseDelta = { x: 0, y: 0 };
-        pitchInput = 0;
-        yawInput = 0;
-        rollInput = 0;
-    }
-}
 
-function onWindowResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-}
+// --- Update Functions --- // <<< Using Direct Controls
 
-function onMouseMove(event) {
-    if (!isPointerLocked || gameOver) return;
-    // Accumulate delta, will be processed in updatePlayer
-    mouseDelta.x += event.movementX || event.mozMovementX || event.webkitMovementX || 0;
-    mouseDelta.y += event.movementY || event.mozMovementY || event.webkitMovementY || 0;
-}
-
-// --- Object Spawning ---
-function spawnInitialObjects() {
-    for (let i = 0; i < MAX_OBJECTS * 0.6; i++) { // Start with a decent number
-        spawnObject(true);
-    }
-}
-
-function spawnObject(initialSpawn = false) {
-     if (activeObjects.length >= MAX_OBJECTS) return; // Don't exceed max
-
-    const isRing = Math.random() > 0.35; // Slightly fewer rings now
-
-    // Calculate spawn center ahead of the player
-    const spawnDist = THREE.MathUtils.randFloat(SPAWN_DISTANCE_MIN, SPAWN_DISTANCE_MAX);
-    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(playerPlane.quaternion);
-    const spawnCenter = initialSpawn
-        ? new THREE.Vector3(0, 60, spawnDist) // Initial spawn relative to origin
-        : new THREE.Vector3().copy(playerPlane.position).addScaledVector(forward, spawnDist);
-
-    // Add random offsets relative to player's orientation
-    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(playerPlane.quaternion);
-    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(playerPlane.quaternion);
-
-    const offsetX = (Math.random() - 0.5) * SPAWN_WIDTH;
-    const offsetY = (Math.random() - 0.5) * SPAWN_HEIGHT;
-
-    const spawnPos = new THREE.Vector3()
-        .copy(spawnCenter)
-        .addScaledVector(right, offsetX)
-        .addScaledVector(up, offsetY);
-
-     // Ensure minimum altitude
-     if (!initialSpawn && spawnPos.y < groundPlane.position.y + 10) {
-        spawnPos.y = groundPlane.position.y + 10 + Math.random() * 15;
-     } else if (initialSpawn && spawnPos.y < 15) {
-        spawnPos.y = 15 + Math.random() * 15;
-     }
-
-
-    let newObject;
-
-    if (isRing) {
-        const ringRadius = RING_BASE_RADIUS + Math.random() * RING_RADIUS_VARIANCE;
-        const tubeRadius = ringRadius * THREE.MathUtils.randFloat(0.1, 0.18);
-        const points = Math.floor(10 + (RING_BASE_RADIUS + RING_RADIUS_VARIANCE - ringRadius) * 5); // Smaller rings = more points
-        // Color based on points (e.g., green=low, yellow=mid, red=high)
-        const hue = THREE.MathUtils.mapLinear(points, 10, 10 + RING_RADIUS_VARIANCE * 5, 0.3, 0.0); // Green to Red
-        const color = new THREE.Color().setHSL(hue, 0.9, 0.6);
-
-        const geometry = new THREE.TorusGeometry(ringRadius, tubeRadius, 10, 40);
-        const material = new THREE.MeshStandardMaterial({
-             color: color,
-             metalness: 0.4,
-             roughness: 0.6,
-             emissive: color, // Make rings glow slightly
-             emissiveIntensity: 0.3
-             });
-        newObject = new THREE.Mesh(geometry, material);
-        newObject.userData = { type: 'ring', points: points, radius: ringRadius /* Collision uses outer radius */ };
-        // Orient the ring to roughly face the player's current position
-         newObject.position.copy(spawnPos);
-         newObject.lookAt(playerPlane.position);
-
-    } else { // Obstacle
-        const size = OBSTACLE_BASE_SIZE + Math.random() * OBSTACLE_SIZE_VARIANCE;
-        const shapeType = Math.random();
-        let geometry;
-        if (shapeType < 0.6) { // Cube
-             geometry = new THREE.BoxGeometry(size, size, size);
-        } else if (shapeType < 0.9) { // Sphere
-             geometry = new THREE.SphereGeometry(size * 0.6, 16, 16); // Sphere radius adjustment
-        } else { // Cone
-            geometry = new THREE.ConeGeometry(size * 0.6, size * 1.2, 8);
-        }
-
-        const material = new THREE.MeshStandardMaterial({
-            color: 0x444455, // Dark grey/blueish
-            metalness: 0.2,
-            roughness: 0.8
-            });
-        newObject = new THREE.Mesh(geometry, material);
-        const damage = Math.floor(size * OBSTACLE_DAMAGE_FACTOR);
-        newObject.userData = { type: 'obstacle', damage: damage, radius: size * 0.7 }; // Approx radius for collision
-        newObject.position.copy(spawnPos);
-        // Random orientation for obstacles
-        newObject.rotation.set(Math.random() * Math.PI * 2, Math.random() * Math.PI * 2, Math.random() * Math.PI * 2);
-    }
-
-    scene.add(newObject);
-    activeObjects.push(newObject);
-}
-
-// --- Update Functions ---
 function updatePlayer(deltaTime) {
-    // --- Speed Control ---
-    if (keyState['w'] || keyState['arrowup']) {
-        currentSpeedFactor = Math.min(MAX_SPEED_FACTOR, currentSpeedFactor + ACCELERATION * deltaTime);
-    } else if (keyState['s'] || keyState['arrowdown']) {
-        currentSpeedFactor = Math.max(MIN_SPEED_FACTOR, currentSpeedFactor - ACCELERATION * deltaTime);
-    } else {
-        // Gradually return to base speed if no input
-        if (currentSpeedFactor > 1.0) {
-             currentSpeedFactor = Math.max(1.0, currentSpeedFactor - DECELERATION * deltaTime * 0.5);
-        } else if (currentSpeedFactor < 1.0) {
-            currentSpeedFactor = Math.min(1.0, currentSpeedFactor + DECELERATION * deltaTime * 0.5);
-        }
-    }
+    if (!playerPlane || gameOver || !gameStarted) return;
 
-    const actualSpeed = BASE_SPEED * currentSpeedFactor;
+    // --- Handle Input ---
+    yawInput = -mouseDelta.x * MOUSE_SENSITIVITY;
+    pitchInput = -mouseDelta.y * MOUSE_SENSITIVITY;
+    mouseDelta.x = 0; // Reset delta
+    mouseDelta.y = 0;
 
-    // --- Rotation Input ---
-    // Reset continuous input axes
-    pitchInput = 0;
-    yawInput = 0; // Yaw mostly comes from banking now
     rollInput = 0;
+    if (keyState['a'] || keyState['arrowleft']) rollInput = ROLL_SPEED * deltaTime;
+    if (keyState['d'] || keyState['arrowright']) rollInput = -ROLL_SPEED * deltaTime;
 
-    // Keyboard Roll
-    if (keyState['a'] || keyState['arrowleft']) {
-        rollInput = 1.0;
-    } else if (keyState['d'] || keyState['arrowright']) {
-        rollInput = -1.0;
+    if (keyState['w'] || keyState['arrowup']) {
+        currentSpeedFactor += ACCELERATION * deltaTime;
     }
-
-    // Mouse Pitch/Yaw Input (apply sensitivity)
-    if (isPointerLocked) {
-        pitchInput = -mouseDelta.y * MOUSE_SENSITIVITY * (PITCH_SPEED / (Math.PI * 0.6)); // Scale mouse input relative to base speed
-        yawInput   = -mouseDelta.x * MOUSE_SENSITIVITY * (YAW_SPEED / (Math.PI * 0.5));
+    if (keyState['s'] || keyState['arrowdown']) {
+        currentSpeedFactor -= ACCELERATION * deltaTime;
     }
-    // Reset accumulated mouse delta
-    mouseDelta = { x: 0, y: 0 };
+    currentSpeedFactor = THREE.MathUtils.clamp(currentSpeedFactor, MIN_SPEED_FACTOR, MAX_SPEED_FACTOR);
+
+    // --- Calculate Rotation (Direct Method) ---
+    playerPlane.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), yawInput * TURN_SPEED); // Yaw around World Y
+    playerPlane.rotateOnAxis(new THREE.Vector3(1, 0, 0), pitchInput * PITCH_SPEED); // Pitch around Local X
+    playerPlane.rotateOnAxis(new THREE.Vector3(0, 0, 1), rollInput); // Roll around Local Z
 
 
-    // --- Calculate Target Rotation Delta ---
-    const deltaRotation = new THREE.Quaternion();
-    const rotationSpeedFactor = 1.0; // Optional: link rotation speed to air speed?
+    // --- Calculate Movement ---
+    const forward = new THREE.Vector3(0, 0, -1); // Local forward is -Z for BoxGeometry default
+    forward.applyQuaternion(playerPlane.quaternion);
+    forward.normalize();
 
-     // Apply Pitch (Rotation around local X axis)
-    const pitchAngle = pitchInput * PITCH_SPEED * rotationSpeedFactor * deltaTime;
-    const pitchDelta = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), pitchAngle);
-    deltaRotation.multiply(pitchDelta);
+    const currentSpeed = BASE_SPEED * currentSpeedFactor;
+    const thrustVector = forward.multiplyScalar(currentSpeed * deltaTime);
 
-    // Apply Yaw (Rotation around local Y axis) - Primarily from Banking + Mouse
-     const currentRoll = getPlaneRoll(); // Get current roll angle
-     const bankYawAngle = -currentRoll * BANKING_FACTOR * YAW_SPEED * deltaTime; // Roll influences yaw
-     const mouseYawAngle = yawInput * YAW_SPEED * rotationSpeedFactor * deltaTime;
-     const yawDelta = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), bankYawAngle + mouseYawAngle);
-     deltaRotation.multiply(yawDelta);
+    playerVelocity.add(thrustVector);
+    playerVelocity.multiplyScalar(MOVEMENT_DAMPING); // Apply damping
 
+    playerPlane.position.add(playerVelocity.clone().multiplyScalar(deltaTime));
 
-    // Apply Roll (Rotation around local Z axis)
-    const rollAngle = rollInput * ROLL_SPEED * rotationSpeedFactor * deltaTime;
-    const rollDelta = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), rollAngle);
-    deltaRotation.multiply(rollDelta);
-
-    // Combine delta with current target
-    targetQuaternion.premultiply(deltaRotation); // Apply delta to the current target
-
-
-    // --- Apply Damping & Limits ---
-    // Decompose target quaternion to Euler for damping/limiting (easier than pure quaternion limits)
-    const targetEuler = new THREE.Euler().setFromQuaternion(targetQuaternion, 'YXZ'); // Use YXZ order
-
-    // Damp roll and pitch towards zero if no input
-     if (Math.abs(rollInput) < 0.1) { // No roll input
-       targetEuler.z *= INPUT_DAMPING;
-     }
-     if (Math.abs(pitchInput) < 0.1) { // No pitch input (mouse stopped moving significantly)
-       targetEuler.x *= INPUT_DAMPING;
-     }
-     // Limit roll and pitch
-     targetEuler.x = THREE.MathUtils.clamp(targetEuler.x, -PITCH_LIMIT, PITCH_LIMIT);
-     targetEuler.z = THREE.MathUtils.clamp(targetEuler.z, -ROLL_LIMIT, ROLL_LIMIT);
-
-    // Convert back to quaternion
-    targetQuaternion.setFromEuler(targetEuler);
-
-
-    // --- Smoothly Interpolate Plane Rotation ---
-    playerPlane.quaternion.slerp(targetQuaternion, 8 * deltaTime); // Increased slerp speed for responsiveness
-
-
-    // --- Update Position ---
-    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(playerPlane.quaternion);
-    playerVelocity.copy(forward).multiplyScalar(actualSpeed);
-    playerPlane.position.addScaledVector(playerVelocity, deltaTime);
-
-    // --- Keep Ground Plane Centered under Player ---
-    groundPlane.position.x = playerPlane.position.x;
-    groundPlane.position.z = playerPlane.position.z;
+    // --- Prevent Flying Too Low ---
+    // Consider plane's rough vertical size for collision check
+    const planeBottomClearance = PLANE_SIZE * 0.2;
+    if (playerPlane.position.y < GROUND_LEVEL + planeBottomClearance) {
+        playerPlane.position.y = GROUND_LEVEL + planeBottomClearance;
+        playerVelocity.y *= 0.1; // Significantly dampen vertical velocity on ground impact
+        if (playerVelocity.y < 0) {
+             playerVelocity.y = 0;
+        }
+        // Optional: Small damage on bumpy landing?
+        // playerHP -= 0.5; if (playerHP <= 0 && !gameOver) endGame("Crashed!");
+    }
 }
 
-// Helper function to estimate roll angle from quaternion
+// --- Camera Update ---
 function getPlaneRoll() {
-    // Project the plane's local X axis onto the world XZ plane
-    // and find the angle relative to the world X axis.
-    // This is a simplification. A more robust way uses Euler angles derived carefully.
-    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(playerPlane.quaternion);
-    return Math.atan2(right.y, right.x) - Math.PI / 2; // Angle relative to horizon basically
-    // A simpler Euler-based approach (prone to gimbal lock issues if not careful):
-    // return new THREE.Euler().setFromQuaternion(playerPlane.quaternion, 'YXZ').z;
+    // Extract roll from the plane's quaternion using Euler angles (YXZ order is often good for aircraft)
+    const euler = new THREE.Euler().setFromQuaternion(playerPlane.quaternion, 'YXZ');
+    return euler.z; // z rotation in YXZ order typically corresponds to roll
 }
 
+function updateCamera(snap = false) {
+    if (!playerPlane || !camera) return;
 
-function updateCamera(forceSnap = false) {
-    // Target position: behind and slightly above the plane's center of mass
-    const offset = new THREE.Vector3(0, CAMERA_HEIGHT, -CAMERA_DISTANCE);
-    const targetPosition = playerPlane.localToWorld(offset.clone());
+    // Get current roll for camera tilt effect
+    const roll = getPlaneRoll();
 
-    // Target lookAt: point slightly ahead of the plane
-    const lookAtOffset = new THREE.Vector3(0, 0, 20); // Look ahead distance
-    const targetLookAt = playerPlane.localToWorld(lookAtOffset.clone());
+    // Calculate desired camera position: behind, slightly above
+    const baseOffset = new THREE.Vector3(0, CAMERA_HEIGHT, CAMERA_DISTANCE); // Note: Z is positive for behind the default THREE object orientation
 
-    if (forceSnap) {
-        camera.position.copy(targetPosition);
-        camera.lookAt(targetLookAt);
+    // Apply plane's rotation to the base offset vector
+    const rotatedOffset = baseOffset.clone().applyQuaternion(playerPlane.quaternion);
+    const desiredPosition = playerPlane.position.clone().add(rotatedOffset);
+
+    // Calculate target point: slightly ahead of the plane for smoother looking
+    const lookAtOffset = new THREE.Vector3(0, 0, -30); // Look ahead (negative Z is forward)
+    const lookAtTarget = playerPlane.position.clone().add(lookAtOffset.applyQuaternion(playerPlane.quaternion));
+
+    if (snap) {
+        camera.position.copy(desiredPosition);
+        camera.lookAt(lookAtTarget); // Snap lookAt as well
     } else {
-        // Smoothly interpolate camera position using lerp
-        camera.position.lerp(targetPosition, CAMERA_LAG);
+        // Smoothly interpolate camera position
+        camera.position.lerp(desiredPosition, CAMERA_LAG);
 
-        // Smoothly interpolate lookAt point - Create a dummy object to lerp its position
-        // This avoids jerky lookAt changes if the targetLookAt jumps around
-        if (!camera.userData.lookAtTarget) {
-            camera.userData.lookAtTarget = new THREE.Vector3();
-            camera.userData.lookAtTarget.copy(targetLookAt); // Initialize
-        }
-         camera.userData.lookAtTarget.lerp(targetLookAt, CAMERA_LAG);
-         camera.lookAt(camera.userData.lookAtTarget);
+        // Smoothly interpolate lookAt target by adjusting camera quaternion
+        const targetQuaternion = new THREE.Quaternion();
+        const tempMatrix = new THREE.Matrix4();
+        tempMatrix.lookAt(camera.position, lookAtTarget, camera.up); // Calculate target orientation matrix
+        targetQuaternion.setFromRotationMatrix(tempMatrix); // Convert matrix to quaternion
+        camera.quaternion.slerp(targetQuaternion, CAMERA_LAG * 1.5); // Slerp towards target orientation (adjust multiplier for responsiveness)
     }
+
+    // Apply camera roll based on plane roll *after* position/lookAt interpolation
+    // This prevents the roll from affecting the lerp target point incorrectly
+    // We need to apply roll relative to the camera's forward direction
+    const cameraForward = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
+    camera.rotateOnAxis(cameraForward, -roll * 0.5); // Apply negated roll around camera's forward axis (adjust multiplier 0.5 for roll intensity)
+
 }
 
 
-function updateObjects(deltaTime) {
-    const playerPos = playerPlane.position;
-    const playerForward = new THREE.Vector3(0, 0, 1).applyQuaternion(playerPlane.quaternion);
+// --- Collision Check --- // <<< Adjusted for new PLANE_SIZE
+function checkCollision(object, distance, index) {
+    const objectCollisionRadius = object.userData.radius || 5;
+    // Use a slightly larger bounding sphere radius for the plane group
+    const planeCollisionRadius = PLANE_SIZE * 0.7; // Tuned value for the new model
 
-    let objectsToSpawn = 0;
-    for (let i = activeObjects.length - 1; i >= 0; i--) {
-        const obj = activeObjects[i];
-        const objPos = obj.position;
-        const distanceToPlayer = playerPos.distanceTo(objPos);
-        const directionToObject = new THREE.Vector3().subVectors(objPos, playerPos).normalize();
-
-        // Cleanup check: Is object behind the player and far enough away?
-        const dot = playerForward.dot(directionToObject); // If dot < 0, object is generally behind
-        if (dot < -0.2 && distanceToPlayer > CLEANUP_DISTANCE) {
-            removeObject(obj, i);
-            objectsToSpawn++;
-        } else {
-            // Collision Check (only if reasonably close and generally in front)
-             if (dot > -0.5 && distanceToPlayer < 100) { // Optimization: check only closer objects
-                 checkCollision(obj, distanceToPlayer);
-             }
-        }
-    }
-
-    // Spawn new objects if needed
-    for (let i = 0; i < objectsToSpawn; i++) {
-        spawnObject();
-    }
-     // Also spawn if count is low
-     if (activeObjects.length < MAX_OBJECTS * 0.5) {
-        spawnObject();
-     }
-
-}
-
-function removeObject(object, index) {
-    scene.remove(object);
-    if (object.geometry) object.geometry.dispose();
-    if (object.material) object.material.dispose();
-    if (index !== undefined) { // Only splice if index is provided
-         activeObjects.splice(index, 1);
-    } else { // Find index if not provided (less efficient)
-        const idx = activeObjects.indexOf(object);
-        if (idx > -1) activeObjects.splice(idx, 1);
-    }
-}
-
-
-function checkCollision(object, distance) {
-    const collisionRadius = object.userData.radius || 5;
-    // Consider plane's general size for collision margin
-    const effectiveCollisionDist = collisionRadius + PLANE_SIZE * 1.5; // A bit more generous
+    const effectiveCollisionDist = objectCollisionRadius + planeCollisionRadius;
 
     if (distance < effectiveCollisionDist) {
         let collided = false;
         if (object.userData.type === 'ring') {
             score += object.userData.points;
             console.log(`%c+${object.userData.points} Score! (${score})`, 'color: green; font-weight: bold;');
-            // TODO: Add visual/audio feedback
             collided = true;
+            // Add sound effect here?
         } else if (object.userData.type === 'obstacle') {
             const damage = object.userData.damage;
             playerHP -= damage;
-            score -= OBSTACLE_SCORE_PENALTY; // Penalize score slightly
+            score -= OBSTACLE_SCORE_PENALTY;
             playerHP = Math.max(0, playerHP);
-            score = Math.max(0, score); // Don't let score go below 0
-            console.log(`%c-${damage} HP! (${playerHP} left). -${OBSTACLE_SCORE_PENALTY} Score.`, 'color: red; font-weight: bold;');
-            // TODO: Add visual/audio feedback (e.g., screen shake, hit sound)
+            score = Math.max(0, score);
+            console.log(`%c-${damage} HP! (${playerHP} left). -${OBSTACLE_SCORE_PENALTY} Score. (${score})`, 'color: red; font-weight: bold;');
             collided = true;
-
-            if (playerHP <= 0) {
+            // Add sound effect, screen shake?
+            if (playerHP <= 0 && !gameOver) {
                  gameOverReason = "Plane Destroyed!";
-                endGame();
+                 endGame();
             }
         }
-
         if (collided) {
-             // Find and remove the object without needing the index passed in
-             removeObject(object);
+             removeObject(object, index);
         }
     }
 }
 
 
-function updateUI() {
-    scoreElement.innerText = `Score: ${score}`;
-    hpElement.innerText = `HP: ${playerHP}`;
-    speedElement.innerText = `Speed: ${(BASE_SPEED * currentSpeedFactor).toFixed(0)}`;
-    timerElement.innerText = `Time: ${Math.ceil(remainingTime)}`;
+// --- Object Spawning & Management ---
+function spawnObject() {
+    if (!playerPlane || activeObjects.length >= MAX_OBJECTS) return;
+
+    const isRing = Math.random() > 0.4; // 60% chance of ring
+    let object;
+    const radius = THREE.MathUtils.randFloat(4, 12); // Slightly larger range
+
+    if (isRing) {
+        const geometry = new THREE.TorusGeometry(radius, radius * 0.2, 8, 32);
+        const material = new THREE.MeshPhongMaterial({ color: 0xffd700, emissive: 0xaa8800, side: THREE.DoubleSide }); // Gold with slight glow
+        object = new THREE.Mesh(geometry, material);
+        object.userData = {
+            type: 'ring',
+            radius: radius,
+            points: Math.max(1, Math.round(RING_POINTS_BASE + RING_POINTS_SIZE_MULTIPLIER / radius))
+        };
+    } else { // Obstacle
+        const geometry = new THREE.IcosahedronGeometry(radius * 0.8, 0); // Or Box, Sphere etc.
+        const material = new THREE.MeshPhongMaterial({ color: 0x778899, flatShading: true }); // Slate grey
+        object = new THREE.Mesh(geometry, material);
+        // object.castShadow = true; // Obstacles can cast shadows
+        object.userData = {
+            type: 'obstacle',
+            radius: radius * 0.8, // Approx collision radius
+            damage: Math.max(5, Math.round(OBSTACLE_DAMAGE_BASE + OBSTACLE_DAMAGE_SIZE_MULTIPLIER * radius))
+        };
+    }
+
+    // Position the object relative to the player's direction
+    const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(playerPlane.quaternion);
+    const spawnDist = THREE.MathUtils.randFloat(OBJECT_SPAWN_RADIUS_MIN, OBJECT_SPAWN_RADIUS_MAX);
+
+    // Spawn in a wider cone ahead
+    const angleH = THREE.MathUtils.randFloatSpread(Math.PI * 0.6); // Horizontal angle spread
+    const angleV = THREE.MathUtils.randFloatSpread(Math.PI * 0.4); // Vertical angle spread
+
+    // Create offset vector relative to forward direction
+    const rightDir = new THREE.Vector3(1, 0, 0).applyQuaternion(playerPlane.quaternion);
+    const upDir = new THREE.Vector3(0, 1, 0).applyQuaternion(playerPlane.quaternion);
+
+    const offset = forwardDir.clone().multiplyScalar(spawnDist)
+                     .add(rightDir.multiplyScalar(Math.sin(angleH) * spawnDist * 0.5)) // Horizontal offset
+                     .add(upDir.multiplyScalar(Math.sin(angleV) * spawnDist * 0.3)); // Vertical offset
+
+
+    const spawnPos = playerPlane.position.clone().add(offset);
+
+    // Clamp height relative to ground
+    spawnPos.y = Math.max(GROUND_LEVEL + OBJECT_SPAWN_HEIGHT_MIN, spawnPos.y);
+    spawnPos.y = Math.min(OBJECT_SPAWN_HEIGHT_MAX, spawnPos.y);
+
+
+    object.position.copy(spawnPos);
+    // Randomly orient objects
+    object.rotation.set(Math.random() * Math.PI * 2, Math.random() * Math.PI * 2, Math.random() * Math.PI * 2);
+
+    scene.add(object);
+    activeObjects.push(object);
 }
 
+function spawnInitialObjects() {
+    // Spawn slightly ahead so they don't appear right on top at start
+    const initialSpawnOffset = 150;
+    const tempPos = playerPlane.position.clone();
+    playerPlane.position.z -= initialSpawnOffset; // Temporarily move player back
+
+    for (let i = 0; i < INITIAL_OBJECTS; i++) {
+        spawnObject();
+    }
+     playerPlane.position.copy(tempPos); // Restore player position
+
+    console.log("Spawned initial objects:", INITIAL_OBJECTS);
+}
+
+
+function updateObjects(deltaTime) {
+    if (!playerPlane || gameOver || !gameStarted) return;
+
+    const playerPos = playerPlane.position;
+    // Increased removal distance to avoid pop-out at high speeds
+    const removalDistanceSq = (OBJECT_SPAWN_RADIUS_MAX * 1.8) ** 2;
+
+    // Get player forward vector once
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(playerPlane.quaternion);
+
+    for (let i = activeObjects.length - 1; i >= 0; i--) {
+        const object = activeObjects[i];
+        const distSq = playerPos.distanceToSquared(object.position);
+
+        // Check collision first
+        checkCollision(object, Math.sqrt(distSq), i);
+
+        // Check for removal if behind player and far away
+        const directionToObject = object.position.clone().sub(playerPos); // Vector from player to object
+        const dist = directionToObject.length(); // Reuse distance if needed later
+        directionToObject.normalize();
+        const dot = directionToObject.dot(forward); // Dot product with player's forward vector
+
+        // Remove if far behind (dot < -0.2) AND beyond min spawn radius, OR just extremely far away
+        if ((dot < -0.2 && dist > OBJECT_SPAWN_RADIUS_MIN * 1.5) || distSq > removalDistanceSq ) {
+             removeObject(object, i);
+        }
+    }
+
+    // Spawn new objects if needed (maybe less frequently than every frame?)
+    if (activeObjects.length < MAX_OBJECTS && Math.random() < 0.1) { // ~10% chance per frame to spawn if needed
+        spawnObject();
+    }
+}
+
+function removeObject(object, index) {
+    if (!object) return;
+    scene.remove(object);
+
+    // Dispose geometry and material to free GPU memory
+    if (object.geometry) object.geometry.dispose();
+    if (object.material) {
+        // If material has maps (textures), dispose them too
+        Object.keys(object.material).forEach(key => {
+            if (object.material[key] && object.material[key].isTexture) {
+                object.material[key].dispose();
+            }
+        });
+        object.material.dispose();
+    }
+
+    // Remove from array using splice
+    if (index >= 0 && index < activeObjects.length) {
+      activeObjects.splice(index, 1);
+    } else {
+      // Fallback if index is wrong somehow (shouldn't happen often)
+      const idx = activeObjects.indexOf(object);
+      if (idx > -1) activeObjects.splice(idx, 1);
+    }
+}
+
+
+// --- WebGL HUD Creation & Update --- (No changes needed from previous version)
+
+function createTextTexture(text, fontSize = 24, fontFace = "Arial", textColor = "white", bgColor = "rgba(0,0,0,0)") {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    context.font = `Bold ${fontSize}px ${fontFace}`;
+    const metrics = context.measureText(text);
+    canvas.width = metrics.width + fontSize * 0.5;
+    canvas.height = fontSize * 1.5;
+    context.font = `Bold ${fontSize}px ${fontFace}`; // Re-apply font after resize
+    context.fillStyle = bgColor;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = textColor;
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(text, canvas.width / 2, canvas.height / 2);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return { texture, width: canvas.width, height: canvas.height };
+}
+
+function createHUDPlane(textureInfo, materialOptions = {}) {
+    const material = new THREE.MeshBasicMaterial({
+        map: textureInfo.texture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        ...materialOptions
+    });
+    const geometry = new THREE.PlaneGeometry(textureInfo.width, textureInfo.height);
+    const plane = new THREE.Mesh(geometry, material);
+    return plane;
+}
+
+function createWebGLHUD() {
+    // Score Text
+    const scoreInfo = createTextTexture("Score: 0", HUD_FONT_SIZE);
+    scoreTextPlane = createHUDPlane(scoreInfo);
+    scoreTextPlane.position.set(
+        HUD_MARGIN + scoreInfo.width / 2,
+        window.innerHeight - HUD_MARGIN - scoreInfo.height / 2,
+        1
+    );
+    hudScene.add(scoreTextPlane);
+
+    // Timer Text
+    const timerInfo = createTextTexture("Time: 120", HUD_FONT_SIZE);
+    timerTextPlane = createHUDPlane(timerInfo);
+    timerTextPlane.position.set(
+        HUD_MARGIN + timerInfo.width / 2,
+        scoreTextPlane.position.y - scoreInfo.height/2 - timerInfo.height/2 - HUD_MARGIN * 0.5,
+        1
+    );
+    hudScene.add(timerTextPlane);
+
+    // HP Label Text
+    const hpLabelInfo = createTextTexture("HP:", HUD_FONT_SIZE);
+    hpLabelTextPlane = createHUDPlane(hpLabelInfo);
+    hpLabelTextPlane.position.set(
+        HUD_MARGIN + hpLabelInfo.width / 2,
+        timerTextPlane.position.y - timerInfo.height/2 - hpLabelInfo.height/2 - HUD_MARGIN * 0.5,
+        1
+    );
+    hudScene.add(hpLabelTextPlane);
+
+    // HP Bar
+    const barWidth = 150;
+    const barHeight = 18;
+    const barPosX = hpLabelTextPlane.position.x + hpLabelInfo.width / 2 + HUD_MARGIN * 0.5;
+
+    // Background
+    const bgMat = new THREE.MeshBasicMaterial({ color: 0x444444, depthTest: false, depthWrite: false, transparent: true, opacity: 0.8 });
+    const bgGeo = new THREE.PlaneGeometry(barWidth, barHeight);
+    hpBarBgPlane = new THREE.Mesh(bgGeo, bgMat);
+    hpBarBgPlane.position.set(barPosX + barWidth / 2, hpLabelTextPlane.position.y, 0.9);
+    hudScene.add(hpBarBgPlane);
+
+    // Foreground
+    const fgMat = new THREE.MeshBasicMaterial({ color: 0x4CAF50, depthTest: false, depthWrite: false });
+    const fgGeo = new THREE.PlaneGeometry(barWidth, barHeight);
+    fgGeo.translate(barWidth / 2, 0, 0); // Anchor left
+    hpBarFgPlane = new THREE.Mesh(fgGeo, fgMat);
+    hpBarFgPlane.position.set(barPosX, hpLabelTextPlane.position.y, 1.0);
+    hpBarFgPlane.scale.x = 1.0;
+    hudScene.add(hpBarFgPlane);
+
+     console.log("WebGL HUD created.");
+}
+
+function updateWebGLHUD() {
+    if (!scoreTextPlane || !timerTextPlane || !hpLabelTextPlane || !hpBarFgPlane || !hpBarBgPlane) {
+        return;
+    }
+    // Update Score Text
+    if (score !== lastScore) {
+        if (scoreTextPlane.material.map) scoreTextPlane.material.map.dispose();
+        if (scoreTextPlane.geometry) scoreTextPlane.geometry.dispose();
+        const scoreInfo = createTextTexture(`Score: ${score}`, HUD_FONT_SIZE);
+        scoreTextPlane.material.map = scoreInfo.texture;
+        scoreTextPlane.geometry = new THREE.PlaneGeometry(scoreInfo.width, scoreInfo.height);
+        scoreTextPlane.position.x = HUD_MARGIN + scoreInfo.width / 2;
+        lastScore = score;
+    }
+    // Update Timer Text
+    const currentTime = Math.max(0, Math.ceil(remainingTime));
+    if (currentTime !== lastTime) {
+         if (timerTextPlane.material.map) timerTextPlane.material.map.dispose();
+         if (timerTextPlane.geometry) timerTextPlane.geometry.dispose();
+        const timerInfo = createTextTexture(`Time: ${currentTime}`, HUD_FONT_SIZE);
+        timerTextPlane.material.map = timerInfo.texture;
+        timerTextPlane.geometry = new THREE.PlaneGeometry(timerInfo.width, timerInfo.height);
+        timerTextPlane.position.x = HUD_MARGIN + timerInfo.width / 2;
+        lastTime = currentTime;
+    }
+    // Update HP Bar
+    if (playerHP !== lastHP) {
+        const hpPercent = Math.max(0, playerHP / MAX_HP);
+        hpBarFgPlane.scale.x = hpPercent;
+        if (hpPercent < 0.3) hpBarFgPlane.material.color.setHex(0xf44336); // Red
+        else if (hpPercent < 0.6) hpBarFgPlane.material.color.setHex(0xffc107); // Yellow
+        else hpBarFgPlane.material.color.setHex(0x4CAF50); // Green
+        hpBarFgPlane.material.needsUpdate = true;
+        lastHP = playerHP;
+    }
+}
+
+
+// --- Event Listeners & Game State --- (Minor adjustments possible)
+function setupEventListeners() {
+    window.addEventListener('keydown', (event) => {
+        if (!gameOver) keyState[event.key.toLowerCase()] = true;
+    });
+    window.addEventListener('keyup', (event) => keyState[event.key.toLowerCase()] = false);
+    window.addEventListener('resize', onWindowResize);
+    document.addEventListener('pointerlockchange', lockChangeAlert, false);
+    document.addEventListener('mozpointerlockchange', lockChangeAlert, false);
+    document.addEventListener('webkitpointerlockchange', lockChangeAlert, false);
+    document.addEventListener('mousemove', onMouseMove, false);
+    startGameButton.addEventListener('click', startGame);
+    // Optional: Add click listener to canvas to re-request pointer lock if lost?
+    canvasContainer.addEventListener('click', () => {
+        if (!isPointerLocked && gameStarted && !gameOver) {
+           requestPointerLock();
+        }
+    });
+    console.log("Event listeners set up.");
+}
+
+function requestPointerLock() {
+     canvasContainer.requestPointerLock = canvasContainer.requestPointerLock || canvasContainer.mozRequestPointerLock || canvasContainer.webkitRequestPointerLock;
+    if (canvasContainer.requestPointerLock) {
+        canvasContainer.requestPointerLock();
+    } else {
+        console.warn("Pointer Lock API not supported or available.");
+    }
+}
+
+function startGame() {
+    if (gameStarted) return;
+    console.log("Start button clicked!");
+    instructionModal.classList.add('hidden');
+    gameOverElement.classList.add('hidden'); // Hide game over message if restarting
+
+    // Reset game state variables
+    score = 0;
+    playerHP = MAX_HP;
+    remainingTime = 120; // Reset timer
+    gameOver = false;
+    gameOverReason = "";
+    playerVelocity.set(0,0,0); // Reset velocity
+    // Reset plane position and orientation (optional, could continue from last spot)
+    playerPlane.position.set(0, 50, 0);
+    playerPlane.quaternion.identity(); // Reset rotation to default
+    targetQuaternion = playerPlane.quaternion.clone(); // Re-init target quaternion
+
+    // Clear existing objects before spawning new ones
+    for (let i = activeObjects.length - 1; i >= 0; i--) {
+         removeObject(activeObjects[i], i);
+    }
+    activeObjects = []; // Ensure array is empty
+
+    requestPointerLock();
+    spawnInitialObjects();
+    gameStarted = true;
+    clock.start(); // Start/restart the clock
+    const initialDelta = clock.getDelta(); // Clear any large delta from pause
+    console.log("Game Started/Restarted!");
+}
+
+function lockChangeAlert() {
+     if (document.pointerLockElement === canvasContainer || document.mozPointerLockElement === canvasContainer || document.webkitPointerLockElement === canvasContainer) {
+        isPointerLocked = true;
+        console.log("Pointer Lock active");
+        // Optional: Pause game when lock is lost? clock.stop()?
+    } else {
+        isPointerLocked = false;
+        console.log("Pointer Lock released");
+        // Clear input state when lock is lost
+        mouseDelta = { x: 0, y: 0 }; pitchInput = 0; yawInput = 0; rollInput = 0;
+        Object.keys(keyState).forEach(key => keyState[key] = false);
+        // Optional: Show a "Paused" message or pause game explicitly
+        // if (gameStarted && !gameOver) { clock.stop(); /* Show pause message */ }
+    }
+}
+
+function onWindowResize() {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+
+    // Update Main Camera
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+
+    // Update HUD Camera
+    hudCamera.left = 0;
+    hudCamera.right = width;
+    hudCamera.top = height;
+    hudCamera.bottom = 0;
+    hudCamera.updateProjectionMatrix();
+
+    // Resize Renderer
+    renderer.setSize(width, height);
+
+    // Reposition HUD Elements
+    if (scoreTextPlane && scoreTextPlane.geometry) {
+         const scoreWidth = scoreTextPlane.geometry.parameters.width;
+         const scoreHeight = scoreTextPlane.geometry.parameters.height;
+         scoreTextPlane.position.set( HUD_MARGIN + scoreWidth / 2, height - HUD_MARGIN - scoreHeight / 2, 1);
+         if (timerTextPlane && timerTextPlane.geometry) {
+             const timerWidth = timerTextPlane.geometry.parameters.width;
+             const timerHeight = timerTextPlane.geometry.parameters.height;
+             timerTextPlane.position.set( HUD_MARGIN + timerWidth / 2, scoreTextPlane.position.y - scoreHeight / 2 - timerHeight / 2 - HUD_MARGIN * 0.5, 1);
+             if (hpLabelTextPlane && hpLabelTextPlane.geometry) {
+                 const hpLabelWidth = hpLabelTextPlane.geometry.parameters.width;
+                 const hpLabelHeight = hpLabelTextPlane.geometry.parameters.height;
+                 hpLabelTextPlane.position.set( HUD_MARGIN + hpLabelWidth / 2, timerTextPlane.position.y - timerHeight / 2 - hpLabelHeight / 2 - HUD_MARGIN * 0.5, 1);
+                  if (hpBarBgPlane && hpBarBgPlane.geometry && hpBarFgPlane && hpBarFgPlane.geometry) {
+                    const barWidth = hpBarBgPlane.geometry.parameters.width;
+                    const barPosX = hpLabelTextPlane.position.x + hpLabelWidth / 2 + HUD_MARGIN * 0.5;
+                    hpBarBgPlane.position.set(barPosX + barWidth / 2, hpLabelTextPlane.position.y, 0.9);
+                    hpBarFgPlane.position.set(barPosX, hpLabelTextPlane.position.y, 1.0);
+                  }
+             }
+         }
+    }
+    console.log("Window resized, HUD repositioned.");
+}
+
+function onMouseMove(event) {
+     if (!isPointerLocked || gameOver || !gameStarted) return;
+     mouseDelta.x += event.movementX || event.mozMovementX || event.webkitMovementX || 0;
+     mouseDelta.y += event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+}
+
+// --- Timer and Game Over ---
 function updateTimer(deltaTime) {
-    if (gameOver) return;
+    if (gameOver || !gameStarted) return;
     remainingTime -= deltaTime;
     if (remainingTime <= 0) {
         remainingTime = 0;
-         gameOverReason = "Time's Up!";
-        endGame();
+        if (!gameOver) { // Ensure endGame is called only once
+             gameOverReason = "Time's Up!";
+             endGame();
+        }
     }
 }
 
 function endGame() {
     if (gameOver) return; // Prevent multiple calls
     gameOver = true;
-    gameOverElement.innerText = `${gameOverReason}\nFinal Score: ${score}\nRefresh to restart.`;
+    gameStarted = false;
+    clock.stop();
+
+    // Do one last HUD update
+    updateWebGLHUD();
+
+    // Show HTML Game Over message
+    gameOverElement.innerText = `${gameOverReason}\nFinal Score: ${score}\nRefresh page to play again.`; // Changed text slightly
     gameOverElement.classList.remove('hidden');
+
+    // Release pointer lock
     if (isPointerLocked) {
-        document.exitPointerLock = document.exitPointerLock ||
-                                  document.mozExitPointerLock ||
-                                  document.webkitExitPointerLock;
-        if(document.exitPointerLock) document.exitPointerLock();
+        document.exitPointerLock = document.exitPointerLock || document.mozExitPointerLock || document.webkitExitPointerLock;
+        if(document.exitPointerLock) {
+            document.exitPointerLock();
+        }
     }
     console.log("Game Over! Reason:", gameOverReason, "Final Score:", score);
+    // Note: Restart logic is currently handled by refreshing the page.
+    // A "Restart Game" button could call the startGame() function again.
 }
 
 // --- Animation Loop ---
 function animate() {
-    if (gameOver) {
-         // Optional: Allow camera movement even after game over?
-         renderer.render(scene, camera);
-         requestAnimationFrame(animate); // Keep rendering but stop updates
-         return;
+    requestAnimationFrame(animate); // Keep loop going
+
+    // Get delta time, but only if clock is running
+    const deltaTime = clock.running ? Math.min(clock.getDelta(), 0.1) : 0;
+
+    // Only run game logic if started and not over
+    if (gameStarted && !gameOver && deltaTime > 0) {
+        updatePlayer(deltaTime);
+        updateObjects(deltaTime);
+        updateTimer(deltaTime);
+        updateCamera(); // Update camera based on player movement
+        updateWebGLHUD(); // Update HUD based on game state changes
+    } else if (gameOver) {
+        // Optionally slowly rotate camera or do something else when game over
+    } else if (!gameStarted) {
+         // Game not started yet (modal showing?) - update camera maybe?
+         updateCamera(true); // Keep camera snapped? Or slowly rotate?
     }
 
-    const deltaTime = Math.min(clock.getDelta(), 0.1); // Clamp delta time to avoid large jumps
 
-    requestAnimationFrame(animate);
+    // Rendering - Always render scenes
+    renderer.clear();                 // Clear color and depth
+    renderer.render(scene, camera);   // Render main game scene
 
-    // Updates
-    updatePlayer(deltaTime);
-    updateCamera(); // Camera updates after player
-    updateObjects(deltaTime); // Includes collision checks
-    updateTimer(deltaTime); // Update game timer
-    updateUI(); // Update score/hp/time display
-
-    renderer.render(scene, camera);
+    renderer.clearDepth();            // Clear depth buffer before HUD
+    renderer.render(hudScene, hudCamera); // Render HUD scene on top
 }
 
 // --- Start ---
-init();
+init(); // Initialize everything

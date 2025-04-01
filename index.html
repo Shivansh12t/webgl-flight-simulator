@@ -3,22 +3,41 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minimal Flight Simulator - Revamped</title>
+    <title>Flight Simulator - In-Game HUD</title>
+    <!-- Make sure style.css is in the same folder or the path is correct -->
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="canvas-container">
-        <!-- Three.js Canvas will be inserted here -->
-    </div>
-    <div id="ui-container">
-        <div id="score">Score: 0</div>
-        <div id="hp">HP: 100</div>
-        <div id="speed">Speed: 0</div>
-        <div id="timer">Time: 120</div> {/* Added Timer */}
-        <div id="game-over" class="hidden">Game Over! Refresh to restart.</div>
+    <!-- Instruction Modal (Stays as HTML) -->
+    <div id="instruction-modal">
+        <div class="modal-content">
+            <h2>How to Play</h2>
+            <p><strong>Goal:</strong> Fly through rings to score points before time runs out or your HP hits zero!</p>
+            <ul>
+                <li><strong>Mouse:</strong> Control Pitch (Up/Down) and Yaw (Left/Right)</li>
+                <li><strong>A / Left Arrow:</strong> Roll Left</li>
+                <li><strong>D / Right Arrow:</strong> Roll Right</li>
+                <li><strong>W / Up Arrow:</strong> Increase Speed</li>
+                <li><strong>S / Down Arrow:</strong> Decrease Speed</li>
+            </ul>
+            <p><strong>Rings:</strong> Give points (smaller rings = more points!).</p>
+            <p><strong>Obstacles (Grey Shapes):</strong> Reduce HP and Score!</p>
+            <button id="start-game-button">Start Flying!</button>
+        </div>
     </div>
 
-    <!-- Get Three.js -->
+    <!-- Game Canvas -->
+    <div id="canvas-container">
+        <!-- Three.js Canvas will be inserted here by script.js -->
+    </div>
+
+    {/* <!-- UI CONTAINER REMOVED - Using WebGL HUD now --> */}
+
+    <!-- Game Over Message (HTML overlay) -->
+    <div id="game-over" class="hidden">Game Over! Refresh to restart.</div>
+
+
+    <!-- Scripts -->
     <script type="importmap">
         {
             "imports": {
