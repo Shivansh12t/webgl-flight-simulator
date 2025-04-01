@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimal Flight Simulator - Revamped</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="canvas-container">
+        <!-- Three.js Canvas will be inserted here -->
+    </div>
+    <div id="ui-container">
+        <div id="score">Score: 0</div>
+        <div id="hp">HP: 100</div>
+        <div id="speed">Speed: 0</div>
+        <div id="timer">Time: 120</div> {/* Added Timer */}
+        <div id="game-over" class="hidden">Game Over! Refresh to restart.</div>
+    </div>
+
+    <!-- Get Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+            }
+        }
+    </script>
+    <script type="module" src="script.js"></script>
+</body>
+</html>
