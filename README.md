@@ -1,4 +1,5 @@
 # WebGL Flight Simulator - Made with Gemini 2.5 Pro
+<img width="962" alt="image" src="https://github.com/user-attachments/assets/a8191fd0-ecee-42c0-93f6-8ad0e6d6f49f" />
 
 A simple flight simulator game built using JavaScript and the Three.js library for WebGL rendering. The goal is to fly a basic aircraft through rings to score points while avoiding obstacles, all before time runs out or the plane's HP reaches zero.
 
